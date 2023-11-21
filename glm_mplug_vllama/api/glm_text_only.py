@@ -1,6 +1,7 @@
 import re
 import sys
-
+import requests
+import json
 sys.path.append(".")
 from tools.tools import print_separator
 import torch
@@ -39,6 +40,7 @@ class TextModel:
     options = ["A?.{0,3}非常相关", "B?.{0,3}比较相关", "C?.{0,3}勉强相关", "D?.{0,3}不相关"]
     options_re_list = f"({'|'.join(options)})"
     opt2score = {0: 95, 1: 80, 2: 60, 3: 40}
+    api_key = "sk-JCgKDsdrCL6SqQyewix85nYQJgEuVKCp3bbsCPuaWEH4rbBY"
 
     def __init__(self, cuda_id=0, load_in_8bit=False, model_name="THUDM/chatglm3-6b"):
         self._chat = None
@@ -60,6 +62,8 @@ class TextModel:
 
             self.model.generation_config = GenerationConfig.from_pretrained(model_name)
             self._chat = self.baichuan_chat
+        elif "gpt" in model_name:
+            self._chat = self.gpt_chat
         else:
             raise ValueError("model_name should be either glm or baichuan.")
 
@@ -76,6 +80,42 @@ class TextModel:
             history=[] if history is None else history
         )
         return res
+
+    def _gpt_chat(self, tokenizer, message, history):
+        instruction = "You are a helpful assistant. " \
+                      "You can help me by answering my questions. " \
+                      "You can not ask me questions. "
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {self.api_key}'
+        }
+        data = {
+            'model': 'gpt-3.5-turbo',
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': instruction
+                },
+                {
+                    'role': 'user',
+                    'content': message
+                }
+            ]
+        }
+        response = requests.post('https://api.chatanywhere.com.cn', headers=headers,
+                                 data=json.dumps(data))
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content']
+        else:
+            raise ValueError(f"Error code {response.status_code} when calling API.")
+
+    def gpt_chat(self, tokenizer, message, history):
+        for i in range(10):
+            try:
+                return self._gpt_chat(tokenizer, message, history)
+            except ValueError:
+                pass
+        raise ValueError("API call failed.")
 
     def chat(self, *args, **kwargs):
         return self._chat(*args, **kwargs), None
@@ -153,8 +193,10 @@ class TextModel:
     def img_match_content(self, image_content, content):
         summary1 = image_content
         if len(summary1) > 20:
-            summary1 = self.summary(image_content)
+            summary1 = self.summary(summary1)
         summary2 = content
+        if len(summary2) > 20:
+            summary2 = self.summary(summary2)
         res = self.sentence_match(summary1, summary2)
         if debugging:
             print(f"{image_content} ===> {summary1}")
